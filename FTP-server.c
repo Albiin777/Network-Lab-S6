@@ -2,108 +2,47 @@
 #include <string.h>
 #include <unistd.h>
 #include <arpa/inet.h>
+#include <sys/socket.h>
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
-
-static const char SERVER_ERR_MSG[] = "ERROR: File Not Found";
-
-static int send_all(int sock, const char *buf, int len) {
-    int sent = 0;
-    while (sent < len) {
-        int n = send(sock, buf + sent, len - sent, 0);
-        if (n <= 0) {
-            return -1;
-        }
-        sent += n;
-    }
-    return 0;
-}
-
-int handle_client(int client_socket) {
-    char buffer[BUFFER_SIZE] = {0};
-    char filename[BUFFER_SIZE] = {0};
-
-    int bytes_received = recv(client_socket, filename, BUFFER_SIZE - 1, 0);
-    if (bytes_received <= 0) {
-        close(client_socket);
-        return 0;
-    }
-    filename[bytes_received] = '\0'; 
-
-    if (strcmp(filename, "exit") == 0) {
-        close(client_socket);
-        return 1;
-    }
-
-    printf("Client requested: %s\n", filename);
-
-    FILE *file = fopen(filename, "rb");
-    if (file == NULL) {
-        printf("File not found: %s\n", filename);
-        send_all(client_socket, SERVER_ERR_MSG, (int)strlen(SERVER_ERR_MSG));
-    } else {
-        size_t n;
-        while ((n = fread(buffer, 1, BUFFER_SIZE, file)) > 0) {
-            if (send_all(client_socket, buffer, (int)n) == -1) {
-                break;
-            }
-        }
-        printf("File sent successfully.\n");
-        fclose(file);
-    }
-
-    close(client_socket);
-    return 0;
-}
+#define BUF 1024
 
 int main() {
-    int server_socket, client_socket;
-    struct sockaddr_in server_addr, client_addr;
-    socklen_t addr_len = sizeof(client_addr);
+    int srv, cli;
+    struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
+    char filename[BUF], buffer[BUF];
 
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_socket < 0) {
-        perror("Socket creation failed");
-        return 1;
-    }
-
+    srv = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
-    if (setsockopt(server_socket, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
-        perror("Setsockopt failed");
-        close(server_socket);
-        return 1;
-    }
+    setsockopt(srv, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_addr.s_addr = INADDR_ANY;
-    server_addr.sin_port = htons(PORT);
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = INADDR_ANY;
+    addr.sin_port = htons(PORT);
 
-    if (bind(server_socket, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
-        perror("Bind failed");
-        close(server_socket);
-        return 1;
-    }
-
-    if (listen(server_socket, 5) < 0) {
-        perror("Listen failed");
-        close(server_socket);
-        return 1;
-    }
-
+    bind(srv, (struct sockaddr *)&addr, sizeof(addr));
+    listen(srv, 5);
     printf("Server listening on port %d...\n", PORT);
-    while (1) {
-        client_socket = accept(server_socket, (struct sockaddr *)&client_addr, &addr_len);
-        if (client_socket < 0) {
-            perror("Accept failed");
-            continue;
-        }
-        printf("Client connected.\n");
-        if (handle_client(client_socket)) {
-            break;
-        }
-    }
 
-    close(server_socket);
-    return 0;
+    while (1) {
+        cli = accept(srv, (struct sockaddr *)&addr, &len);
+        printf("Client connected.\n");
+
+        int n = recv(cli, filename, BUF - 1, 0);
+        filename[n] = '\0';
+        printf("Requested: %s\n", filename);
+
+        FILE *f = fopen(filename, "rb");  // rb = works for ALL file types
+        if (!f) {
+            send(cli, "ERROR: File Not Found", 21, 0);
+            printf("File not found.\n");
+        } else {
+            while ((n = fread(buffer, 1, BUF, f)) > 0)
+                send(cli, buffer, n, 0);
+            fclose(f);
+            printf("File sent.\n");
+        }
+        close(cli);
+    }
 }
